@@ -517,7 +517,7 @@ def _wrap_strftime(object, format, timetuple):
         else:
             push(ch)
     newformat = "".join(newformat)
-    return _time.strftime(newformat, timetuple)
+    return _time_strftime(newformat, timetuple)
 
 
 # A 4-year cycle has an extra leap day over what we'd get from pasting
