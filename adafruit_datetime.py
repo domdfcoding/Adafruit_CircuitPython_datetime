@@ -6,6 +6,7 @@
 #                         All rights reserved.
 # SPDX-FileCopyrightText: 1991-1995 Stichting Mathematisch Centrum. All rights reserved.
 # SPDX-FileCopyrightText: 2017 Paul Sokolovsky
+# SPDX-FileCopyrightText: 2018 Noralf Trønnes
 # SPDX-License-Identifier: Python-2.0
 
 """
@@ -222,6 +223,301 @@ def _format_time(hh, mm, ss, us, timespec="auto"):
         spec = "{:02d}:{:02d}:{:02d}"
     fmt = spec
     return fmt.format(hh, mm, ss, us)
+
+
+def _divide_and_round(a, b):
+    """divide a by b and round result to the nearest integer
+
+    When the ratio is exactly half-way between two integers,
+    the even integer is returned.
+    """
+    # Based on the reference implementation for divmod_near
+    # in Objects/longobject.c.
+    q, r = divmod(a, b)
+    # round up if either r / b > 0.5, or r / b == 0.5 and q is odd.
+    # The expression r / b > 0.5 is equivalent to 2 * r > b if b is
+    # positive, 2 * r < b if b negative.
+    r *= 2
+    greater_than_half = r > b if b > 0 else r < b
+    if greater_than_half or r == b and q % 2 == 1:
+        q += 1
+
+    return q
+
+
+# _checktm, _wday_names, _month_names, _time_strftime from
+# https://github.com/notro/tmp_CircuitPython_stdlib/blob/master/lib/time.py
+# MIT License
+# Copyright 2018 Noralf Trønnes
+
+def _checktm(t):
+    try:
+        t.tm_year
+    except AttributeError:
+        if len(t) != 9:
+            raise TypeError(f"function takes exactly 9 arguments ({len(t)} given)")
+        t = _time.struct_time(t)
+
+    #    if t.tm_year < 0:
+    #         raise ValueError("year out of range")
+
+    if t.tm_mon == 0:
+        tmp = list(t)
+        tmp[1] = 1
+        t = _time.struct_time(tuple(tmp))
+    if t.tm_mon < 1 or t.tm_mon > 12:
+        raise ValueError("month out of range")
+
+    if t.tm_mday == 0:
+        tmp = list(t)
+        tmp[2] = 1
+        t = _time.struct_time(tuple(tmp))
+    if t.tm_mday < 1 or t.tm_mday > 31:
+        raise ValueError("day of month out of range")
+
+    if t.tm_hour < 0 or t.tm_hour > 23:
+        raise ValueError("hour out of range")
+
+    if t.tm_min < 0 or t.tm_min > 59:
+        raise ValueError("minute out of range")
+
+    if t.tm_sec < 0 or t.tm_sec > 61:
+        raise ValueError("seconds out of range")
+
+    if t.tm_wday < 0 or t.tm_wday > 6:
+        raise ValueError("day of week out of range")
+
+    if t.tm_yday == 0:
+        tmp = list(t)
+        tmp[7] = 1
+        t = _time.struct_time(tuple(tmp))
+    if t.tm_yday < 1 or t.tm_yday > 366:
+        raise ValueError("day of year out of range")
+
+    return t
+
+
+_wday_names = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+_month_names = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
+
+def _time_strftime(_format, t=None):
+    if t is None:
+        t = _time.localtime()
+    else:
+        t = _checktm(t)
+
+    s = ""
+    modifier = False
+    flag_pad = None
+    flag_pad_width = None
+
+    for c in _format:
+        if c == "%":
+            if modifier:
+                modifier = False
+                s += "%"
+            else:
+                modifier = True
+            continue
+
+        if not modifier:
+            s += c
+
+        else:
+            if c == "_":
+                flag_pad = ""
+                continue
+            if c == "-":
+                flag_pad = ""
+                flag_pad_width = ""
+                continue
+            if c == "0" and flag_pad_width is None:
+                flag_pad = "0"
+                continue
+            if c.isdigit():
+                if flag_pad_width is None:
+                    flag_pad_width = c
+                else:
+                    flag_pad_width += c
+                continue
+
+            # Used by most
+            pad = "0" if flag_pad is None else flag_pad
+            pad += "2" if flag_pad_width is None else flag_pad_width
+
+            if c == "a":
+                s += _wday_names[t.tm_wday][:3]
+            elif c == "A":
+                s += _wday_names[t.tm_wday]
+            elif c == "b":
+                s += _month_names[t.tm_mon - 1][:3]
+            elif c == "B":
+                s += _month_names[t.tm_mon - 1]
+            elif c == "c":
+                s += _time_strftime("%a %b %d %H:%M:%S %Y", t)
+            elif c == "d":
+                s += "{:{pad}d}".format(t.tm_mday, pad=pad)
+            elif c == "H":
+                s += "{:{pad}d}".format(t.tm_hour, pad=pad)
+            elif c == "I":
+                if t.tm_hour > 12:
+                    h = t.tm_hour - 12
+                elif t.tm_hour > 0:
+                    h = t.tm_hour
+                else:
+                    h = 12
+                s += "{:{pad}d}".format(h, pad=pad)
+            elif c == "j":
+                pad = "0" if flag_pad is None else flag_pad
+                pad += "3" if flag_pad_width is None else flag_pad_width
+                s += "{:{pad}d}".format(t.tm_yday, pad=pad)
+            elif c == "m":
+                s += "{:{pad}d}".format(t.tm_mon, pad=pad)
+            elif c == "M":
+                s += "{:{pad}d}".format(t.tm_min, pad=pad)
+            elif c == "p":
+                s += "AM" if t.tm_hour < 12 else "PM"
+            elif c == "S":
+                s += "{:{pad}d}".format(t.tm_sec, pad=pad)
+            elif c == "U":
+                s += "TODO"
+            elif c == "w":
+                s += "{:d}".format((t.tm_wday + 1) % 7)
+            elif c == "W":
+                s += "TODO"
+            elif c == "x":  # Locale’s appropriate date representation.
+                s += _time_strftime("%m/%d/%y", t)
+            elif c == "X":  # Locale’s appropriate time representation.
+                s += _time_strftime("%H:%M:%S", t)
+            elif c == "y":
+                s += "{:{pad}d}".format(t.tm_year % 100, pad=pad)
+            elif c == "Y":
+                pad = "0" if flag_pad is None else flag_pad
+                pad += "" if flag_pad_width is None else flag_pad_width
+                s += "{:{pad}d}".format(t.tm_year, pad=pad)
+            elif c == "z":
+                s += "+0000"
+            #            elif c == 'Z':
+            #                s += ''
+            elif c == "D":
+                s += "{:02d}/{:02d}/{:02d}".format(t.tm_mon, t.tm_mday, t.tm_year % 100)
+            elif c == "e":
+                s += "{:2d}".format(t.tm_mday)
+            elif c == "k":
+                s += "{:2d}".format(t.tm_hour)
+            elif c == "n":
+                s += "\n"
+            elif c == "r":
+                s += _time_strftime("%I:%M:%S %p", t)
+            elif c == "R":
+                s += _time_strftime("%H:%M", t)
+            #            elif c == 's':
+            #                s += ''
+            elif c == "t":
+                s += "\t"
+            elif c == "T":
+                s += _time_strftime("%H:%M:%S", t)
+            else:
+                # Doesn't recognise this one
+                s += "%" + c
+
+            modifier = False
+            flag_pad = None
+            flag_pad_width = None
+
+    return s
+
+
+# Correctly substitute for %z and %Z escapes in strftime formats.
+def _wrap_strftime(object, format, timetuple):
+    # Don't call utcoffset() or tzname() unless actually needed.
+    freplace = None  # the string to use for %f
+    zreplace = None  # the string to use for %z
+    Zreplace = None  # the string to use for %Z
+
+    # Scan format for %z and %Z escapes, replacing as needed.
+    newformat = []
+    push = newformat.append
+    i, n = 0, len(format)
+    while i < n:
+        ch = format[i]
+        i += 1
+        if ch == "%":
+            if i < n:
+                ch = format[i]
+                i += 1
+                if ch == "f":
+                    if freplace is None:
+                        freplace = "%06d" % getattr(object, "microsecond", 0)
+                    newformat.append(freplace)
+                elif ch == "z":
+                    if zreplace is None:
+                        zreplace = ""
+                        if hasattr(object, "utcoffset"):
+                            offset = object.utcoffset()
+                            if offset is not None:
+                                sign = "+"
+                                if offset.days < 0:
+                                    offset = -offset
+                                    sign = "-"
+                                h, rest = divmod(offset, timedelta(hours=1))
+                                m, rest = divmod(rest, timedelta(minutes=1))
+                                s = rest.seconds
+                                u = offset.microseconds
+                                if u:
+                                    zreplace = "%c%02d%02d%02d.%06d" % (
+                                        sign,
+                                        h,
+                                        m,
+                                        s,
+                                        u,
+                                    )
+                                elif s:
+                                    zreplace = "%c%02d%02d%02d" % (sign, h, m, s)
+                                else:
+                                    zreplace = "%c%02d%02d" % (sign, h, m)
+                    assert "%" not in zreplace
+                    newformat.append(zreplace)
+                elif ch == "Z":
+                    if Zreplace is None:
+                        Zreplace = ""
+                        if hasattr(object, "tzname"):
+                            s = object.tzname()
+                            if s is not None:
+                                # strftime is going to have at this: escape %
+                                Zreplace = s.replace("%", "%%")
+                    newformat.append(Zreplace)
+                else:
+                    push("%")
+                    push(ch)
+            else:
+                push("%")
+        else:
+            push(ch)
+    newformat = "".join(newformat)
+    return _time.strftime(newformat, timetuple)
 
 
 # A 4-year cycle has an extra leap day over what we'd get from pasting
@@ -470,6 +766,9 @@ class timedelta:
         return s
 
     # Supported operations
+    def __pos__(self):
+        return self
+
     def __neg__(self):
         return timedelta(-self._days, -self._seconds, -self._microseconds)
 
@@ -482,6 +781,8 @@ class timedelta:
             )
         return NotImplemented
 
+    __radd__ = __add__
+
     def __sub__(self, other):
         if isinstance(other, timedelta):
             return timedelta(
@@ -490,6 +791,17 @@ class timedelta:
                 self._microseconds - other._microseconds,
             )
         return NotImplemented
+
+    def __rsub__(self, other):
+        if isinstance(other, timedelta):
+            return -self + other
+        return NotImplemented
+
+    def __abs__(self):
+        if self._days < 0:
+            return -self
+
+        return self
 
     def _to_microseconds(self):
         return (self._days * (24 * 3600) + self._seconds) * 1000000 + self._microseconds
@@ -501,6 +813,17 @@ class timedelta:
         if isinstance(other, timedelta):
             return usec // other._to_microseconds()
         return timedelta(0, 0, usec // other)
+
+    def __truediv__(self, other):
+        usec = self._to_microseconds()
+        if isinstance(other, timedelta):
+            return usec / other._to_microseconds()
+        if isinstance(other, int):
+            return timedelta(0, 0, _divide_and_round(usec, other))
+        if isinstance(other, float):
+            a, b = other.as_integer_ratio()
+            return timedelta(0, 0, _divide_and_round(b * usec, a))
+        return NotImplemented
 
     def __mod__(self, other):
         if isinstance(other, timedelta):
@@ -778,6 +1101,38 @@ class date:
     def _setstate(self, string):
         yhi, ylo, self._month, self._day = string
         self._year = yhi * 256 + ylo
+
+    def __add__(self, other):
+        """Add a date to a timedelta."""
+        if isinstance(other, timedelta):
+            o = self.toordinal() + other.days
+            if 0 < o <= _MAXORDINAL:
+                return type(self).fromordinal(o)
+            raise OverflowError("result out of range")
+        return NotImplemented
+
+    __radd__ = __add__
+
+    def __sub__(self, other):
+        """Subtract two dates, or a date and a timedelta."""
+        if isinstance(other, timedelta):
+            return self + timedelta(-other.days)
+        if isinstance(other, date):
+            days1 = self.toordinal()
+            days2 = other.toordinal()
+            return timedelta(days1 - days2)
+        return NotImplemented
+
+    def strftime(self, fmt):
+        "Format using strftime()."
+        return _wrap_strftime(self, fmt, self.timetuple())
+
+    def __format__(self, fmt):
+        if not isinstance(fmt, str):
+            raise TypeError("must be str, not %s" % type(fmt).__name__)
+        if len(fmt) != 0:
+            return self.strftime(fmt)
+        return str(self)
 
 
 class timezone(tzinfo):
@@ -1159,6 +1514,8 @@ class time:
     def __format__(self, fmt):
         if not isinstance(fmt, str):
             raise TypeError("must be str, not %s" % type(fmt).__name__)
+        if len(fmt) != 0:
+            return self.strftime(fmt)
         return str(self)
 
     def __repr__(self):
@@ -1191,6 +1548,15 @@ class time:
         if not self._tzinfo is None:
             return (basestate, self._tzinfo)
         return (basestate,)
+
+    def strftime(self, fmt):
+        """Format using strftime().  The date part of the timestamp passed
+        to underlying strftime should not be used.
+        """
+        # The year must be >= 1000 else Python's strftime implementation
+        # can raise a bogus exception.
+        timetuple = (1900, 1, 1, self._hour, self._minute, self._second, 0, 1, -1)
+        return _wrap_strftime(self, fmt, timetuple)
 
 
 # pylint: disable=too-many-instance-attributes, too-many-public-methods
